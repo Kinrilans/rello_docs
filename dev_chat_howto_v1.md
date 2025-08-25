@@ -3,8 +3,7 @@
 @@
 +# Инструкция: как пользоваться репозиторием `rello_docs` в новом dev-чате (v1)
 +
-+Репозиторий: https://github.com/Kinrilans/rello_docs.git  
-+Часовой пояс: Europe/Warsaw · Активы: USDT/USDC · Сеть старта: TRC-20
++Репозиторий: https://github.com/Kinrilans/rello_docs.git 
 +
 +> Источник истины — файлы в ветке `main`. Если в чате возникает расхождение, ссылаться на конкретный файл/раздел и предлагать правку (патч в Markdown).
 +> Формат ответов в чате по коду: готовые файлы/дифф + шаги запуска/проверки + ссылки на разделы.  
@@ -50,8 +49,6 @@
 +  RAW: https://raw.githubusercontent.com/Kinrilans/rello_docs/main/product/tiers_table_v2.md
 +- **`product/arbitration_rules_v2.md`** — правила удержаний/сроков (1–2 страницы).  
 +  RAW: https://raw.githubusercontent.com/Kinrilans/rello_docs/main/product/arbitration_rules_v2.md
-+- **`product/mvp_plan_v1.md`** — недельный план (0–4), приоритеты.  
-+  RAW: https://raw.githubusercontent.com/Kinrilans/rello_docs/main/product/mvp_plan_v1.md
 +
 +---
 +
