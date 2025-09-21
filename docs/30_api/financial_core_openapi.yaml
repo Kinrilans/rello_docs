@@ -1,0 +1,884 @@
+openapi: 3.0.3
+info:
+  title: Rello Financial Core API
+  version: 1.0.0-mvp
+  description: |
+    HTTP/JSON API для финансового ядра Rello Club (MVP). 
+
+    **Главное**
+    - Протокол: HTTPS, JSON, префикс `/api/v1`.
+    - TZ: UTC; формат времени — ISO-8601 (`yyyy-MM-dd'T'HH:mm:ss'Z'`).
+    - Идентификация и подпись: HMAC (см. ниже), + `X-Api-Key`.
+    - Идемпотентность: заголовок `Idempotency-Key` на все операции записи (TTL 24h).
+    - Трассировка: `X-Correlation-Id` пробрасывается во все логи/ответы.
+    - Валюты: `RC` (внутренняя 1:1 к USDT/USD), `USDT`, `USDC`, `EUR` (референс для расчётов).
+    - Сеть: `TRC20`.
+
+    **Подпись HMAC**
+    - Заголовки: `X-Api-Key`, `X-Signature`, `X-Nonce`, `X-Timestamp`, `X-Correlation-Id` (опц.).
+    - Алгоритм: `HMAC-SHA256( body + "\n" + method + "\n" + path + "\n" + timestamp + "\n" + nonce )`,
+      где `timestamp` — UNIX seconds, `nonce` — случайная строка. Результат — base64.
+    - Допуск рассинхронизации часов: ±300 сек.
+
+servers:
+  - url: https://api.example.com/api/v1
+    description: Production (placeholder)
+  - url: https://stage.api.example.com/api/v1
+    description: Stage (placeholder)
+
+security:
+  - HmacAuth: []
+
+paths:
+  ############################################################
+  # Health & Meta
+  ############################################################
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  ############################################################
+  # Rates (EUR/USDT → RC)
+  ############################################################
+  /rates:
+    get:
+      summary: Get spot rates
+      description: Возвращает набор спотовых курсов (например, EUR/USDT) с меткой устаревания.
+      operationId: listRates
+      parameters:
+        - in: query
+          name: pairs
+          description: Список пар через запятую, например `EURUSDT`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of rates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Rate'
+  /convert:
+    get:
+      summary: Convert amount between currencies
+      description: Конвертирует сумму между валютами. Для `to=RC` используется RC≡USDT.
+      operationId: convertAmount
+      parameters:
+        - $ref: '#/components/parameters/FromCurrency'
+        - $ref: '#/components/parameters/ToCurrency'
+        - $ref: '#/components/parameters/Amount'
+      responses:
+        '200':
+          description: Converted amount
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversionResult'
+
+  ############################################################
+  # Fees (Service & Group)
+  ############################################################
+  /fees/service:
+    get:
+      summary: Get global service fees
+      operationId: getServiceFees
+      responses:
+        '200':
+          description: Current service fees
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceFees'
+    put:
+      summary: Update global service fees
+      operationId: updateServiceFees
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceFeesUpdate'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceFees'
+  /fees/group/{group_id}:
+    parameters:
+      - $ref: '#/components/parameters/GroupId'
+    get:
+      summary: Get group default client fees (B2C/C2B)
+      operationId: getGroupFees
+      responses:
+        '200':
+          description: Group fees
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupClientFees'
+    put:
+      summary: Update group default client fees
+      operationId: updateGroupFees
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupClientFeesUpdate'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupClientFees'
+
+  ############################################################
+  # Groups (wallet provisioning)
+  ############################################################
+  /groups/{group_id}/wallet: 
+    parameters:
+      - $ref: '#/components/parameters/GroupId'
+    post:
+      summary: Ensure RC wallet for group exists
+      operationId: ensureGroupWallet
+      responses:
+        '200':
+          description: Wallet info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+
+  ############################################################
+  # Top-Ups (TRC20 → RC)
+  ############################################################
+  /topups:
+    post:
+      summary: Create top-up intent (TRC20 → RC)
+      operationId: createTopup
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopupRequest'
+      responses:
+        '201':
+          description: Top-up intent created
+          headers:
+            Location:
+              description: URL ресурса
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopupIntent'
+        '409':
+          $ref: '#/components/responses/IdempotentConflict'
+  /topups/{topup_id}:
+    parameters:
+      - $ref: '#/components/parameters/TopupId'
+    get:
+      summary: Get top-up intent status
+      operationId: getTopup
+      responses:
+        '200':
+          description: Top-up intent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopupIntent'
+
+  ############################################################
+  # Withdrawals (RC → TRC20)
+  ############################################################
+  /withdrawals:
+    post:
+      summary: Create withdrawal (RC → TRC20)
+      operationId: createWithdrawal
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WithdrawalRequest'
+      responses:
+        '201':
+          description: Withdrawal created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Withdrawal'
+        '422':
+          description: Validation / AML error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/IdempotentConflict'
+  /withdrawals/{withdrawal_id}:
+    parameters:
+      - $ref: '#/components/parameters/WithdrawalId'
+    get:
+      summary: Get withdrawal status
+      operationId: getWithdrawal
+      responses:
+        '200':
+          description: Withdrawal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Withdrawal'
+
+  ############################################################
+  # Deals (RC escrow/holds)
+  ############################################################
+  /deals:
+    post:
+      summary: Create deal (B2C/C2B) with RC hold
+      operationId: createDeal
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DealCreateRequest'
+      responses:
+        '201':
+          description: Deal created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deal'
+        '422':
+          description: Validation error (e.g., insufficient RC at payer)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/IdempotentConflict'
+  /deals/{deal_id}:
+    parameters:
+      - $ref: '#/components/parameters/DealId'
+    get:
+      summary: Get deal
+      operationId: getDeal
+      responses:
+        '200':
+          description: Deal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deal'
+  /deals/{deal_id}/actions/confirm:
+    post:
+      summary: Finalize deal with success
+      operationId: confirmDeal
+      parameters:
+        - $ref: '#/components/parameters/DealId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Deal updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deal'
+  /deals/{deal_id}/actions/cancel:
+    post:
+      summary: Cancel deal (before arbitration)
+      operationId: cancelDeal
+      parameters:
+        - $ref: '#/components/parameters/DealId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Deal cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deal'
+  /deals/{deal_id}/actions/arbitrate:
+    post:
+      summary: Arbitrate deal (win/split/refund)
+      operationId: arbitrateDeal
+      parameters:
+        - $ref: '#/components/parameters/DealId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                outcome:
+                  type: string
+                  enum: [win, split, refund]
+                  description: |
+                    win — в пользу получателя RC; split — 50/50; refund — полная отмена и возврат холда.
+      responses:
+        '200':
+          description: Deal arbitrated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deal'
+
+  ############################################################
+  # Security / Locks
+  ############################################################
+  /security/locks/{user_id}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      summary: Create 24h post-restore lock (or other lock)
+      operationId: createLock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum: [post_restore_24h]
+      responses:
+        '204':
+          description: Created
+    delete:
+      summary: Release user lock
+      operationId: releaseLock
+      responses:
+        '204':
+          description: Released
+  /security/ban/{user_id}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      summary: Ban user
+      operationId: banUser
+      responses:
+        '204':
+          description: Banned
+    delete:
+      summary: Unban user
+      operationId: unbanUser
+      responses:
+        '204':
+          description: Unbanned
+
+  ############################################################
+  # Referrals
+  ############################################################
+  /referrals/config:
+    get:
+      summary: Get referral program config
+      operationId: getReferralConfig
+      responses:
+        '200':
+          description: Config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferralConfig'
+    put:
+      summary: Update referral program config
+      operationId: updateReferralConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReferralConfigUpdate'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferralConfig'
+  /referrals/users/{user_id}/summary:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    get:
+      summary: Get referral summary for user (current tier, accrued RC)
+      operationId: getReferralSummary
+      responses:
+        '200':
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferralSummary'
+
+components:
+  securitySchemes:
+    HmacAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: |
+        Подпишите запрос согласно описанию в разделе **Подпись HMAC** и передайте `X-Signature`, `X-Nonce`, `X-Timestamp` вместе с `X-Api-Key`.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        description: UUID v4
+    GroupId:
+      name: group_id
+      in: path
+      required: true
+      schema:
+        type: string
+    DealId:
+      name: deal_id
+      in: path
+      required: true
+      schema:
+        type: string
+    WithdrawalId:
+      name: withdrawal_id
+      in: path
+      required: true
+      schema:
+        type: string
+    TopupId:
+      name: topup_id
+      in: path
+      required: true
+      schema:
+        type: string
+    UserId:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        type: string
+    FromCurrency:
+      name: from
+      in: query
+      required: true
+      schema:
+        $ref: '#/components/schemas/Currency'
+    ToCurrency:
+      name: to
+      in: query
+      required: true
+      schema:
+        $ref: '#/components/schemas/Currency'
+    Amount:
+      name: amount
+      in: query
+      required: true
+      schema:
+        type: string
+        pattern: '^[0-9]+(\.[0-9]{1,8})?$'
+  responses:
+    IdempotentConflict:
+      description: Idempotent request already processed (conflict)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        time:
+          type: string
+          format: date-time
+    Currency:
+      type: string
+      enum: [RC, USDT, USDC, EUR]
+    Token:
+      type: string
+      enum: [USDT, USDC]
+    Network:
+      type: string
+      enum: [TRC20]
+    Money:
+      type: object
+      properties:
+        currency:
+          $ref: '#/components/schemas/Currency'
+        amount:
+          type: string
+          pattern: '^[0-9]+(\.[0-9]{1,6})?$'
+      required: [currency, amount]
+    Wallet:
+      type: object
+      properties:
+        id:
+          type: string
+        owner_type:
+          type: string
+          enum: [user, group, service]
+        owner_id:
+          type: string
+        balance_rc:
+          type: string
+          description: Количество RC (6 знаков после запятой)
+    Rate:
+      type: object
+      properties:
+        pair:
+          type: string
+          example: EURUSDT
+        price:
+          type: string
+          example: '1.0932'
+        as_of:
+          type: string
+          format: date-time
+        stale:
+          type: boolean
+    ConversionResult:
+      type: object
+      properties:
+        from:
+          $ref: '#/components/schemas/Currency'
+        to:
+          $ref: '#/components/schemas/Currency'
+        amount:
+          type: string
+        rate:
+          type: string
+        converted_amount:
+          type: string
+        stale:
+          type: boolean
+    ServiceFees:
+      type: object
+      description: Глобальные комиссии сервиса, задаются через OfficeBot
+      properties:
+        rc_topup_fee_percent:
+          type: number
+          format: float
+          description: Комиссия сервиса за пополнение RC
+        rc_withdraw_fee_percent:
+          type: number
+          format: float
+          description: Комиссия сервиса за вывод RC (используется как комиссия возврата при AML high-risk)
+        deposit_topup_fee_percent:
+          type: number
+          format: float
+          description: Комиссия за пополнение депозита (USDT TRC20)
+        deposit_withdraw_fee_percent:
+          type: number
+          format: float
+          description: Комиссия за вывод депозита (USDT TRC20)
+        deal_service_fee_percent:
+          type: number
+          format: float
+          description: Базовая комиссия сервиса за сделки (может уточняться по типам)
+    ServiceFeesUpdate:
+      allOf:
+        - $ref: '#/components/schemas/ServiceFees'
+    GroupClientFees:
+      type: object
+      description: Дефолтные комиссии продавца для сделок в группе
+      properties:
+        b2c_percent:
+          type: number
+          format: float
+        c2b_percent:
+          type: number
+          format: float
+    GroupClientFeesUpdate:
+      allOf:
+        - $ref: '#/components/schemas/GroupClientFees'
+    TopupRequest:
+      type: object
+      required: [owner_type, owner_id, token]
+      properties:
+        owner_type:
+          type: string
+          enum: [user, group]
+        owner_id:
+          type: string
+        token:
+          $ref: '#/components/schemas/Token'
+        network:
+          $ref: '#/components/schemas/Network'
+          default: TRC20
+        expected_amount:
+          type: string
+          description: Необязательная ожидаемая сумма для UX (не влияет на зачисление)
+    TopupIntent:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, funded, aml_checking, aml_high_risk, credited, expired, refunded]
+        owner_type:
+          type: string
+        owner_id:
+          type: string
+        token:
+          $ref: '#/components/schemas/Token'
+        network:
+          $ref: '#/components/schemas/Network'
+        deposit_address:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        aml:
+          type: object
+          properties:
+            risk:
+              type: string
+              enum: [low, medium, high, unknown]
+            report_id:
+              type: string
+        tx_in:
+          type: object
+          properties:
+            hash:
+              type: string
+            url:
+              type: string
+        credit_rc_amount:
+          type: string
+          description: Зачисленная сумма RC при `credited`
+    WithdrawalRequest:
+      type: object
+      required: [owner_type, owner_id, amount_rc, destination_address]
+      properties:
+        owner_type:
+          type: string
+          enum: [user, group]
+        owner_id:
+          type: string
+        amount_rc:
+          type: string
+          description: Сумма в RC (6 знаков)
+        prefer_token:
+          $ref: '#/components/schemas/Token'
+          description: Предпочитаемый токен для вывода (может быть заменён при нехватке ликвидности)
+        network:
+          $ref: '#/components/schemas/Network'
+          default: TRC20
+        destination_address:
+          type: string
+        allow_token_substitution:
+          type: boolean
+          default: true
+    Withdrawal:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, aml_checking, sending, sent, failed]
+        owner_type:
+          type: string
+        owner_id:
+          type: string
+        amount_rc:
+          type: string
+        effective_token:
+          $ref: '#/components/schemas/Token'
+        network:
+          $ref: '#/components/schemas/Network'
+        destination_address:
+          type: string
+        aml:
+          type: object
+          properties:
+            risk:
+              type: string
+              enum: [low, medium, high, unknown]
+            report_id:
+              type: string
+        tx_out:
+          type: object
+          properties:
+            hash:
+              type: string
+            url:
+              type: string
+    DealCreateRequest:
+      type: object
+      required: [type, amount_rc, payer, payee]
+      properties:
+        type:
+          type: string
+          enum: [B2C, C2B]
+          description: |
+            B2C (Business→Crypto): клиент получает RC, холд у продавца;
+            C2B: клиент платит RC, холд у клиента.
+        amount_rc:
+          type: string
+        payer:
+          type: object
+          properties:
+            owner_type:
+              type: string
+              enum: [user, group]
+            owner_id:
+              type: string
+        payee:
+          type: object
+          properties:
+            owner_type:
+              type: string
+              enum: [user, group]
+            owner_id:
+              type: string
+        client_fee_percent:
+          type: number
+          format: float
+          description: Комиссия продавца (из группы/объявления)
+        service_fee_percent:
+          type: number
+          format: float
+          description: Комиссия сервиса (из глобальных)
+        ad_id:
+          type: string
+          description: Идентификатор объявления (если сделка из Topics)
+    Deal:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [B2C, C2B]
+        status:
+          type: string
+          enum: [draft, held, success, cancelled, arbitration]
+        amount_rc:
+          type: string
+        hold_side:
+          type: string
+          enum: [payer, payee]
+        payer:
+          type: object
+          properties:
+            owner_type:
+              type: string
+            owner_id:
+              type: string
+        payee:
+          type: object
+          properties:
+            owner_type:
+              type: string
+            owner_id:
+              type: string
+        commissions:
+          type: object
+          properties:
+            client_fee_percent:
+              type: number
+            service_fee_percent:
+              type: number
+            total_client_fee_rc:
+              type: string
+            total_service_fee_rc:
+              type: string
+        notice:
+          type: object
+          description: Побочный эффект — сформировано событие для NoticeBot
+          properties:
+            last_notice_id:
+              type: string
+    ReferralConfig:
+      type: object
+      description: Конфиг реферальной программы (проценты берутся из прибыли сервиса по сделкам рефералов)
+      properties:
+        base_rate:
+          type: number
+          format: float
+          description: Стартовый % от прибыли сервиса (например, 0.05 = 5%)
+        max_rate:
+          type: number
+          format: float
+          description: Максимальный % (например, 0.10 = 10%)
+        tiers:
+          type: array
+          description: Правила повышения ставки на основе количества **собственных** завершённых сделок реферера
+          items:
+            type: object
+            properties:
+              min_own_deals:
+                type: integer
+              rate:
+                type: number
+                format: float
+      required: [base_rate, max_rate]
+    ReferralConfigUpdate:
+      allOf:
+        - $ref: '#/components/schemas/ReferralConfig'
+    ReferralSummary:
+      type: object
+      properties:
+        current_rate:
+          type: number
+          format: float
+        accrued_rc_month:
+          type: string
+          description: Накоплено к выплате в текущем месяце (в RC)
+        own_deals_completed:
+          type: integer
+        next_tier:
+          type: object
+          properties:
+            at_deals:
+              type: integer
+            rate:
+              type: number
+              format: float
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          example: AML_HIGH_RISK_DEST
+        message:
+          type: string
+          example: Destination address is high-risk
+        user_message:
+          type: string
+          example: Адрес назначения не прошёл проверку AML. Укажите другой адрес.
+        correlation_id:
+          type: string
+      required: [code, message]
